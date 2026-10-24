@@ -1,11 +1,11 @@
 {
-    "name": "campuslost",
-    "short_name": "campuslost",
+    "name": "CampusFind - Campus Lost & Found Portal",
+    "short_name": "CampusFind",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "CampusFind - Campus Lost & Found Portal",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

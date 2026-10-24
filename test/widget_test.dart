@@ -21,4 +21,32 @@ void main() {
     // Verify that CampusFind branding is found.
     expect(find.textContaining('CampusFind'), findsWidgets);
   });
+
+  test('SharedPreferences persistence and CampusItem serialization test', () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+
+    final testItem = CampusItem(
+      id: 'test-item-1',
+      title: 'Lost Backpack',
+      description: 'Black backpack left in library',
+      category: 'Wallets & Bags',
+      type: ItemType.lost,
+      location: 'Central Library',
+      date: 'Today',
+      contactPerson: 'Jane Doe',
+      contactInfo: 'jane@campus.edu',
+    );
+
+    // Verify serialization round-trip
+    final jsonMap = testItem.toJson();
+    final reconstructed = CampusItem.fromJson(jsonMap);
+    expect(reconstructed.id, testItem.id);
+    expect(reconstructed.title, testItem.title);
+    expect(reconstructed.type, testItem.type);
+
+    // Verify storage in SharedPreferences
+    await prefs.setString('test_key', jsonMap['title'] as String);
+    expect(prefs.getString('test_key'), 'Lost Backpack');
+  });
 }
