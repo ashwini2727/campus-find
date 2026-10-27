@@ -1,9 +1,14 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'firebase_options.dart';
+import 'dart:async';
 
-void main() {
+
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   runApp(const CampusFindApp());
 }
 
@@ -70,7 +75,260 @@ class CampusFindApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const MainScreen(),
+      home: const AuthGate(),
+    );
+  }
+}
+
+/// Firebase login/signup gate. The existing CampusFind UI opens after login.
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            backgroundColor: Color(0xFFF8FAFC),
+            body: Center(
+              child: CircularProgressIndicator(color: Color(0xFF0D9488)),
+            ),
+          );
+        }
+        if (snapshot.hasError) {
+          return Scaffold(
+            backgroundColor: const Color(0xFFF8FAFC),
+            body: Center(
+              child: Text('Authentication error: ${snapshot.error}'),
+            ),
+          );
+        }
+        final user = snapshot.data;
+        if (user == null) {
+          return const AuthScreen();
+        }
+        return const MainScreen();
+      },
+    );
+  }
+}
+
+class AuthScreen extends StatefulWidget {
+  const AuthScreen({super.key});
+  @override
+  State<AuthScreen> createState() => _AuthScreenState();
+}
+
+class _AuthScreenState extends State<AuthScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _name = TextEditingController();
+  final _email = TextEditingController();
+  final _password = TextEditingController();
+  final _confirm = TextEditingController();
+  bool _signup = false;
+  bool _busy = false;
+  bool _hidePassword = true;
+
+  @override
+  void dispose() {
+    _name.dispose(); _email.dispose(); _password.dispose(); _confirm.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    setState(() => _busy = true);
+    try {
+      final auth = FirebaseAuth.instance;
+      if (_signup) {
+        final credential = await auth.createUserWithEmailAndPassword(
+          email: _email.text.trim(), password: _password.text,
+        );
+        final user = credential.user!;
+        await user.updateDisplayName(_name.text.trim());
+        await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+          'name': _name.text.trim(), 'email': _email.text.trim(),
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      } else {
+        await auth.signInWithEmailAndPassword(
+          email: _email.text.trim(), password: _password.text,
+        );
+      }
+    } on FirebaseAuthException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+          switch (e.code) {
+            'email-already-in-use' => 'Ee email tho account already undhi.',
+            'invalid-email' => 'Correct email enter cheyyi.',
+            'weak-password' => 'Password at least 6 characters undali.',
+            'user-not-found' || 'wrong-password' || 'invalid-credential' => 'Email/password correct kaadhu.',
+            'network-request-failed' => 'Internet connection check cheyyi.',
+            _ => e.message ?? 'Authentication failed. Malli try cheyyi.',
+          },
+        )));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const navy = Color(0xFF0F2537);
+    const teal = Color(0xFF0D9488);
+       return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC),
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(22),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 430),
+            child: Card(
+              elevation: 3,
+              child: Padding(
+                padding: const EdgeInsets.all(28),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Icon(
+                        Icons.school_rounded,
+                        size: 54,
+                        color: teal,
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'CampusFind',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                          color: navy,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        _signup
+                            ? 'Create your student account'
+                            : 'Sign in to your campus portal',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.blueGrey),
+                      ),
+                      const SizedBox(height: 24),
+                      if (_signup) ...[
+                        TextFormField(
+                          controller: _name,
+                          decoration: const InputDecoration(
+                            labelText: 'Full name',
+                            prefixIcon: Icon(Icons.person_outline),
+                          ),
+                          validator: (v) =>
+                              v == null || v.trim().isEmpty
+                                  ? 'Name enter cheyyi'
+                                  : null,
+                        ),
+                        const SizedBox(height: 14),
+                      ],
+                      TextFormField(
+                        controller: _email,
+                        keyboardType: TextInputType.emailAddress,
+                        decoration: const InputDecoration(
+                          labelText: 'Email',
+                          prefixIcon: Icon(Icons.email_outlined),
+                        ),
+                        validator: (v) =>
+                            v == null || !v.trim().contains('@')
+                                ? 'Valid email enter cheyyi'
+                                : null,
+                      ),
+                      const SizedBox(height: 14),
+                      TextFormField(
+                        controller: _password,
+                        obscureText: _hidePassword,
+                        decoration: InputDecoration(
+                          labelText: 'Password',
+                          prefixIcon: const Icon(Icons.lock_outline),
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              _hidePassword
+                                  ? Icons.visibility
+                                  : Icons.visibility_off,
+                            ),
+                            onPressed: () => setState(
+                              () => _hidePassword = !_hidePassword,
+                            ),
+                          ),
+                        ),
+                        validator: (v) =>
+                            v == null || v.length < 6
+                                ? 'Password at least 6 characters undali'
+                                : null,
+                      ),
+                      if (_signup) ...[
+                        const SizedBox(height: 14),
+                        TextFormField(
+                          controller: _confirm,
+                          obscureText: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Confirm password',
+                            prefixIcon: Icon(Icons.lock_reset),
+                          ),
+                          validator: (v) =>
+                              v != _password.text
+                                  ? 'Passwords match avvatledhu'
+                                  : null,
+                        ),
+                      ],
+                      const SizedBox(height: 22),
+                      FilledButton(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: navy,
+                          padding: const EdgeInsets.symmetric(vertical: 15),
+                        ),
+                        onPressed: _busy ? null : _submit,
+                        child: _busy
+                            ? const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Text(
+                                _signup ? 'Create Account' : 'Login',
+                              ),
+                      ),
+                      TextButton(
+                        onPressed: _busy
+                            ? null
+                            : () => setState(() => _signup = !_signup),
+                        child: Text(
+                          _signup
+                              ? 'Already have an account? Login'
+                              : 'New student? Create account',
+                          style: const TextStyle(color: teal),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -93,6 +351,7 @@ class CampusItem {
   final String contactInfo;
   bool isResolved;
   final bool isMyReport;
+  final String ownerId;
 
   CampusItem({
     required this.id,
@@ -106,6 +365,7 @@ class CampusItem {
     required this.contactInfo,
     this.isResolved = false,
     this.isMyReport = false,
+    this.ownerId = '',
   });
 
   Map<String, dynamic> toJson() {
@@ -121,6 +381,7 @@ class CampusItem {
       'contactInfo': contactInfo,
       'isResolved': isResolved,
       'isMyReport': isMyReport,
+      'ownerId': ownerId,
     };
   }
 
@@ -137,6 +398,7 @@ class CampusItem {
       contactInfo: json['contactInfo'] as String? ?? '',
       isResolved: json['isResolved'] as bool? ?? false,
       isMyReport: json['isMyReport'] as bool? ?? false,
+      ownerId: json['ownerId'] as String? ?? '',
     );
   }
 }
@@ -249,7 +511,7 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
-  static const String _storageKey = 'campusfind_items_v1';
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _reportsSubscription;
 
   int _currentNavIndex = 0;
   List<CampusItem> _items = [];
@@ -274,109 +536,90 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
-    _loadSavedItems();
+    _listenToReports();
   }
 
-  // Load items from browser local storage
-  Future<void> _loadSavedItems() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final String? rawData = prefs.getString(_storageKey);
-      if (rawData != null && rawData.isNotEmpty) {
-        final List<dynamic> decoded = jsonDecode(rawData) as List<dynamic>;
-        final loadedItems = decoded
-            .map((item) => CampusItem.fromJson(item as Map<String, dynamic>))
-            .toList();
+  // Listen to shared reports in Firestore. Reports are visible to signed-in students.
+  void _listenToReports() {
+    _reportsSubscription = FirebaseFirestore.instance.collection('reports')
+      .orderBy('createdAt', descending: true).snapshots().listen((snapshot) {
+        final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+        final loaded = snapshot.docs.map((doc) {
+          final data = Map<String, dynamic>.from(doc.data());
+          data['id'] = doc.id;
+          final item = CampusItem.fromJson(data);
+          return CampusItem(id: item.id, title: item.title, description: item.description,
+            category: item.category, type: item.type, location: item.location, date: item.date,
+            contactPerson: item.contactPerson, contactInfo: item.contactInfo,
+            isResolved: item.isResolved, ownerId: item.ownerId,
+            isMyReport: item.ownerId == uid);
+        }).toList();
+        if (mounted) setState(() { _items = loaded; _isLoading = false; });
+      }, onError: (Object error) {
+        debugPrint('Firestore reports stream error: $error');
         if (mounted) {
-          setState(() {
-            _items = loadedItems;
-            _isLoading = false;
-          });
+          setState(() => _isLoading = false);
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Reports load avvaledhu. Firestore Rules check cheyyi.')));
         }
-        return;
+      });
+  }
+
+  @override
+  void dispose() {
+    _reportsSubscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _addNewItem(CampusItem newItem) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    try {
+      final doc = FirebaseFirestore.instance.collection('reports').doc();
+      await doc.set({
+        ...newItem.toJson(), 'id': doc.id, 'ownerId': user.uid,
+        'isMyReport': false, 'createdAt': FieldValue.serverTimestamp(),
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('${newItem.type == ItemType.lost ? "Lost" : "Found"} report posted successfully!'),
+          backgroundColor: const Color(0xFF0D9488), behavior: SnackBarBehavior.floating));
       }
     } catch (e) {
-      debugPrint('Error loading saved items: $e');
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Report save avvaledhu: $e')));
     }
-
-    // Default fallback: load initial sample items and persist them
-    final initial = getInitialSampleItems();
-    if (mounted) {
-      setState(() {
-        _items = initial;
-        _isLoading = false;
-      });
-    }
-    _saveItemsToStorage(initial);
   }
 
-  // Save current items to browser local storage
-  Future<void> _saveItemsToStorage(List<CampusItem> itemsToSave) async {
+  Future<void> _toggleResolveItem(CampusItem item) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || item.ownerId != user.uid) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Mee own report matrame update cheyyagalru.')));
+      return;
+    }
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final encoded = jsonEncode(itemsToSave.map((item) => item.toJson()).toList());
-      await prefs.setString(_storageKey, encoded);
+      await FirebaseFirestore.instance.collection('reports').doc(item.id)
+        .update({'isResolved': !item.isResolved});
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(item.isResolved ? 'Marked as Active again.' : 'Marked as Resolved! Great news.')));
+      }
     } catch (e) {
-      debugPrint('Error saving items: $e');
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Update failed: $e')));
     }
   }
 
-  // Add a newly reported item and persist it
-  void _addNewItem(CampusItem newItem) {
-    setState(() {
-      _items.insert(0, newItem);
-    });
-    _saveItemsToStorage(_items);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.check_circle_rounded, color: Colors.white),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                '${newItem.type == ItemType.lost ? "Lost" : "Found"} report posted successfully!',
-                style: const TextStyle(fontWeight: FontWeight.w500),
-              ),
-            ),
-          ],
-        ),
-        backgroundColor: const Color(0xFF0D9488),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        margin: const EdgeInsets.all(16),
-      ),
-    );
-  }
-
-  // Toggle resolved status and persist it
-  void _toggleResolveItem(CampusItem item) {
-    setState(() {
-      item.isResolved = !item.isResolved;
-    });
-    _saveItemsToStorage(_items);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          item.isResolved ? 'Marked as Resolved! Great news.' : 'Marked as Active again.',
-        ),
-        duration: const Duration(seconds: 2),
-      ),
-    );
-  }
-
-  // Delete an item from My Reports and persist it
-  void _deleteItem(CampusItem item) {
-    setState(() {
-      _items.removeWhere((i) => i.id == item.id);
-    });
-    _saveItemsToStorage(_items);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Report deleted.'),
-        duration: Duration(seconds: 2),
-      ),
-    );
+  Future<void> _deleteItem(CampusItem item) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || item.ownerId != user.uid) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Mee own report matrame delete cheyyagalru.')));
+      return;
+    }
+    try {
+      await FirebaseFirestore.instance.collection('reports').doc(item.id).delete();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Report deleted.')));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+    }
   }
 
   // Open the "Report Item" dialog
@@ -415,7 +658,7 @@ class _MainScreenState extends State<MainScreen> {
 
     // Determine screen width for responsive desktop vs mobile layout
     final screenWidth = MediaQuery.sizeOf(context).width;
-    final isDesktop = screenWidth >= 850;
+    final isDesktop = screenWidth >= 800;
 
     // Build the active view based on navigation selection
     Widget activeBody;
@@ -493,6 +736,20 @@ class _MainScreenState extends State<MainScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.logout_rounded),
+            tooltip: 'Logout',
+            onPressed: () async {
+              try {
+                await FirebaseAuth.instance.signOut();
+              } catch (e) {
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Logout failed: $e')),
+                );
+              }
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.add_circle_outline_rounded),
             tooltip: 'Report Item',
@@ -593,7 +850,10 @@ class _MainScreenState extends State<MainScreen> {
             label: 'My Campus Profile',
             index: 2,
           ),
-
+          const SizedBox(height: 6),
+          const Divider(color: Colors.white12, height: 1, indent: 12, endIndent: 12),
+          const SizedBox(height: 6),
+          _buildSidebarLogoutItem(),
           const Spacer(),
 
           // Quick Action Box in Desktop Sidebar
@@ -713,6 +973,58 @@ class _MainScreenState extends State<MainScreen> {
                     ),
                   ),
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSidebarLogoutItem() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: Tooltip(
+        message: 'Sign out of CampusFind',
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(10),
+            hoverColor: const Color(0xFFEF4444).withValues(alpha: 0.15),
+            onTap: () async {
+              try {
+                await FirebaseAuth.instance.signOut();
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Logout failed: $e')),
+                );
+              }
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Row(
+                children: [
+                  Icon(
+                    Icons.logout_rounded,
+                    color: Color(0xFFF87171),
+                    size: 20,
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Logout',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -2036,6 +2348,7 @@ class _ReportItemDialogState extends State<ReportItemDialog> {
         contactInfo: _contactInfoController.text.trim(),
         isResolved: false,
         isMyReport: true,
+        ownerId: FirebaseAuth.instance.currentUser?.uid ?? '',
       );
 
       widget.onSubmit(newItem);
